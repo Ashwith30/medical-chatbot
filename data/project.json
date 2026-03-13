@@ -1,0 +1,116 @@
+{
+  "healthcare_standards": [
+    {
+      "name": "RxNorm",
+      "category": "Medication Terminology Standard",
+      "description": "RxNorm is a standardized naming system for clinical drugs developed by the U.S. National Library of Medicine. It provides normalized names and unique identifiers for medicines and links different drug vocabularies used across pharmacy and healthcare systems.",
+      "purpose": [
+        "Standardize medication names",
+        "Enable interoperability between pharmacy systems",
+        "Support e-prescriptions and clinical decision systems"
+      ],
+      "key_features": [
+        "Unique RxCUI identifiers",
+        "Maps brand and generic drugs",
+        "Integrates multiple drug databases"
+      ],
+      "example_use_case": "Ensures that 'Paracetamol 500 mg Tablet' is recognized as the same drug across hospitals and pharmacies."
+    },
+    {
+      "name": "SNOMED CT",
+      "category": "Clinical Terminology",
+      "description": "SNOMED CT (Systematized Nomenclature of Medicine – Clinical Terms) is a comprehensive clinical healthcare terminology used to encode diseases, procedures, symptoms, and clinical findings in electronic health records.",
+      "purpose": [
+        "Standardize clinical documentation",
+        "Improve data sharing across healthcare systems",
+        "Support clinical analytics and decision-making"
+      ],
+      "key_features": [
+        "Concept-based hierarchy",
+        "Unique concept identifiers",
+        "Supports detailed clinical expressions"
+      ],
+      "example_use_case": "Recording 'Type 2 Diabetes Mellitus' using a standard code instead of free text."
+    },
+    {
+      "name": "LOINC",
+      "category": "Laboratory and Clinical Observations Standard",
+      "description": "LOINC (Logical Observation Identifiers Names and Codes) is a universal standard for identifying laboratory tests, clinical measurements, and observations.",
+      "purpose": [
+        "Standardize lab test reporting",
+        "Enable exchange of diagnostic results",
+        "Improve interoperability between labs and hospitals"
+      ],
+      "key_features": [
+        "Universal lab test codes",
+        "Covers laboratory and clinical measurements",
+        "Widely used in EHR systems"
+      ],
+      "example_use_case": "Assigning a standard code to a 'Blood Glucose Test' result."
+    },
+    {
+      "name": "ICD",
+      "category": "Disease Classification System",
+      "description": "ICD (International Classification of Diseases) is a global diagnostic classification system developed by the World Health Organization for coding diseases and health conditions.",
+      "purpose": [
+        "Medical billing and insurance claims",
+        "Disease statistics and reporting",
+        "Public health monitoring"
+      ],
+      "key_features": [
+        "Hierarchical disease codes",
+        "Global healthcare adoption",
+        "Supports epidemiological research"
+      ],
+      "example_use_case": "Using ICD-10 code E11 for Type 2 Diabetes diagnosis."
+    },
+    {
+      "name": "FHIR",
+      "category": "Healthcare Data Exchange Standard",
+      "description": "FHIR (Fast Healthcare Interoperability Resources) is a modern healthcare data exchange standard developed by HL7 that uses APIs and JSON/XML formats to share healthcare information electronically.",
+      "purpose": [
+        "Enable real-time healthcare data exchange",
+        "Support healthcare APIs",
+        "Improve interoperability between systems"
+      ],
+      "key_features": [
+        "RESTful APIs",
+        "JSON and XML support",
+        "Modular resources like Patient, Observation, Medication"
+      ],
+      "example_use_case": "A mobile health app retrieving patient lab reports from a hospital system."
+    },
+    {
+      "name": "Mirth Connect",
+      "category": "Healthcare Integration Engine",
+      "description": "Mirth Connect is an open-source healthcare integration engine used to connect different healthcare systems and transform healthcare messages between formats such as HL7, FHIR, and databases.",
+      "purpose": [
+        "System integration",
+        "Message transformation",
+        "Healthcare interoperability"
+      ],
+      "key_features": [
+        "Supports HL7, FHIR, XML, JSON",
+        "Message routing and transformation",
+        "Interface engine for hospitals"
+      ],
+      "example_use_case": "Converting HL7 lab messages into FHIR format for modern applications."
+    },
+    {
+      "name": "ABDM",
+      "category": "National Digital Health Framework",
+      "description": "ABDM (Ayushman Bharat Digital Mission) is India's national digital health ecosystem initiative that enables secure health data exchange using Health IDs, consent-based access, and interoperable standards.",
+      "purpose": [
+        "Create digital health infrastructure in India",
+        "Enable patient-controlled data sharing",
+        "Standardize healthcare data nationwide"
+      ],
+      "key_features": [
+        "ABHA Health ID",
+        "Consent-based data sharing",
+        "Interoperability using FHIR standards"
+      ],
+      "example_use_case": "A patient sharing medical records between two hospitals using ABHA consent."
+    }
+  ]
+}

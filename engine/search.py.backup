@@ -1,0 +1,661 @@
+"""
+Medical Data Search Engine
+Searches through medical records and provides relevant results
+Implements hybrid routing: LLM for medical understanding, local DB for codes/terminology
+"""
+import json
+import os
+import re
+from typing import List, Dict, Any, Tuple
+
+# external dependency for API calls
+import requests
+from difflib import get_close_matches
+
+# Patterns for identifying code/terminology lookups (route to local database)
+CODE_PATTERNS = [
+    r'\bICD[-\s]?\d{1,2}\b',           # ICD-9, ICD-10
+    r'\bICD[-\s]?10[-\s]?CM\b',       # ICD-10-CM
+    r'\bICD[-\s]?9[-\s]?CM\b',        # ICD-9-CM
+    r'\b[A-Z]\d{2,3}(\.\d{1,4})?\b',  # ICD code format (e.g., A00, E11.9)
+    r'\bLOINC\b',                       # LOINC codes
+    r'\bLOINC_NUM\b',                   # LOINC number pattern
+    r'\bRXNORM\b',                      # RxNorm codes
+    r'\bRXCUI\b',                       # RxNorm Concept Unique Identifier
+    r'\bSNOMED\b',                      # SNOMED CT
+    r'\bSCT\b',                         # SNOMED CT abbreviation
+    r'\bCPT\b',                         # CPT codes
+    r'\bHCPCS\b',                       # HCPCS codes
+    r'\bNDC\b',                         # NDC codes
+    r'\bcode\s+(for|of)\b',            # "code for..."
+    r'\blookup\b',                      # explicit lookup requests
+    r'\b\d{5,7}[-]\d{1,2}\b',          # LOINC code format (e.g., 100000-9)
+    r'\b\d{6,18}\b',                    # Numeric codes (SNOMED, etc.)
+]
+
+# Patterns for medical understanding queries (route to LLM)
+MEDICAL_UNDERSTANDING_PATTERNS = [
+    r'\bsymptoms?\b',
+    r'\btreatment\b',
+    r'\bcauses?\b',
+    r'\bwhat\s+(is|are)\b',
+    r'\bhow\s+(to|do|does)\b',
+    r'\bexplain\b',
+    r'\bmeaning\s+of\b',
+    r'\bdefinition\b',
+    r'\bmedication\b',
+    r'\bdrug\b',
+    r'\bdosage\b',
+    r'\bside\s+effects?\b',
+]
+
+
+def classify_query(query: str) -> Tuple[str, float]:
+    """
+    Classify a query to determine routing: LLM API or local database.
+    
+    Returns:
+        Tuple of (route_type, confidence)
+        route_type: 'llm' for medical understanding, 'local' for code lookup
+    """
+    query_lower = query.lower().strip()
+    
+    # Check for code/terminology patterns (strong indicator for local database)
+    for pattern in CODE_PATTERNS:
+        if re.search(pattern, query, re.IGNORECASE):
+            return ('local', 0.95)
+    
+    # Check for explicit code patterns like "A00" or "E11.9" (ICD code format)
+    if re.search(r'\b[A-Z]\d{2,3}(\.\d{1,4})?\b', query):
+        return ('local', 0.90)
+    
+    # Check for medical understanding patterns (route to LLM)
+    for pattern in MEDICAL_UNDERSTANDING_PATTERNS:
+        if re.search(pattern, query_lower):
+            return ('llm', 0.85)
+    
+    # Default to LLM for general medical questions
+    # (safer to provide information than to fail on code lookup)
+    return ('llm', 0.60)
+
+# Error message when medical database is unavailable
+DATABASE_UNAVAILABLE_MSG = (
+    "Sorry, I'm having trouble accessing the medical database right now. "
+    "Please try again later or consult with a healthcare professional."
+)
+
+# Track database availability
+_database_available = True
+
+
+def check_database_available() -> bool:
+    """Check if the medical database files are accessible"""
+    global _database_available
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    
+    # Check if data directory exists and has at least one data file
+    if not os.path.exists(data_dir):
+        _database_available = False
+        return False
+    
+    required_files = ['record.json', 'RXNCONSO_sample.json', 'RXNREL_sample.json', 'RXNSAT_sample.json']
+    has_any_file = any(os.path.exists(os.path.join(data_dir, f)) for f in required_files)
+    _database_available = has_any_file
+    return has_any_file
+
+
+def load_medical_data() -> List[Dict[str, Any]]:
+    """Load medical data from JSON file"""
+    global _database_available
+    
+    try:
+        data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'record.json')
+        with open(data_path, 'r', encoding='utf-8') as file:
+            _database_available = True
+            return json.load(file)
+    except FileNotFoundError:
+        print(f"Warning: Medical data file not found at {data_path}")
+        _database_available = False
+        return []
+    except json.JSONDecodeError:
+        print("Warning: Invalid JSON format in medical data file")
+        _database_available = False
+        return []
+
+
+def load_rxnorm_data() -> Dict[str, List[Dict]]:
+    """Load RxNorm data from JSON files"""
+    global _database_available
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    rxnorm_data = {'conso': [], 'rel': [], 'sat': []}
+    
+    try:
+        # Load RXNCONSO (concepts)
+        conso_path = os.path.join(data_dir, 'RXNCONSO_sample.json')
+        if os.path.exists(conso_path):
+            with open(conso_path, 'r', encoding='utf-8') as f:
+                rxnorm_data['conso'] = json.load(f)
+        
+        # Load RXNREL (relationships)
+        rel_path = os.path.join(data_dir, 'RXNREL_sample.json')
+        if os.path.exists(rel_path):
+            with open(rel_path, 'r', encoding='utf-8') as f:
+                rxnorm_data['rel'] = json.load(f)
+        
+        # Load RXNSAT (attributes)
+        sat_path = os.path.join(data_dir, 'RXNSAT_sample.json')
+        if os.path.exists(sat_path):
+            with open(sat_path, 'r', encoding='utf-8') as f:
+                rxnorm_data['sat'] = json.load(f)
+        
+        _database_available = True
+        return rxnorm_data
+    except Exception as e:
+        print(f"Warning: Error loading RxNorm data: {e}")
+        _database_available = False
+        return rxnorm_data
+
+
+def load_snomed_data() -> List[Dict]:
+    """Load SNOMED CT data from JSONL file"""
+    global _database_available
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    snomed_data = []
+    
+    try:
+        # Try to load snomed-300k.jsonl
+        snomed_path = os.path.join(data_dir, 'snomed-300k (1).jsonl')
+        if not os.path.exists(snomed_path):
+            # Try alternative name
+            snomed_path = os.path.join(data_dir, 'snomed-300k.jsonl')
+        
+        if os.path.exists(snomed_path):
+            with open(snomed_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            snomed_data.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        
+        if snomed_data:
+            _database_available = True
+        return snomed_data
+    except Exception as e:
+        print(f"Warning: Error loading SNOMED data: {e}")
+        return []
+
+
+def load_loinc_data() -> List[Dict]:
+    """Load LOINC data from JSON file"""
+    global _database_available
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    loinc_data = []
+    
+   try:
+        loinc_path = os.path.join(data_dir, 'loinc.json')
+        if os.path.exists(loinc_path):
+            with open(loinc_path, 'r', encoding='utf-8') as f:
+                loinc_data = json.load(f)
+            
+            if loinc_data:
+                _database_available = True
+        return loinc_data
+    except Exception as e:
+        print(f"Warning: Error loading LOINC data: {e}")
+        _database_available = False
+        return []
+
+
+def load_project_terminology() -> Dict[str, Any]:
+    """Load medical coding terminology from project.json"""
+    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
+    
+   try:
+        project_path = os.path.join(data_dir, 'project.json')
+        if os.path.exists(project_path):
+            with open(project_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Warning: Error loading project terminology: {e}")
+    
+    return {}
+
+
+
+
+    results = []
+    seen_codes = set()
+    
+    # Extract RXCUI from query (e.g., "RXCUI: 38" or just "38")
+    rxcui_match = re.search(r'(?:rxcui[:\s]*)?(\d+)', query_lower)
+    search_rxcui = rxcui_match.group(1) if rxcui_match else None
+    
+    # Search in RXNCONSO (concepts)
+    for record in rxnorm_data.get('conso', []):
+        name = record.get('STR', '').lower()
+        rxcui = record.get('RXCUI', '')
+        code = record.get('CODE', '')
+        tty = record.get('TTY', 'Unknown')
+        
+        # Match by RXCUI, CODE, or name
+        match = False
+        relevance = 0.0
+        
+        if search_rxcui and (rxcui == search_rxcui or code == search_rxcui):
+            match = True
+            relevance = 100.0  # Exact RXCUI match
+        elif query_lower in name:
+            match = True
+            relevance = 95.0 if name == query_lower else 85.0
+        elif query_lower in rxcui.lower() or query_lower in code.lower():
+            match = True
+            relevance = 80.0
+        
+        if match and rxcui not in seen_codes:
+            seen_codes.add(rxcui)
+            results.append({
+                'code': rxcui,
+                'term': record.get('STR', ''),
+                'description': f"RxNorm {tty}: {record.get('STR', '')}",
+                'system': 'RXNORM',
+                'relevance': relevance
+            })
+    
+    # Sort by relevance and limit
+    results.sort(key=lambda x: x['relevance'], reverse=True)
+    return results[:limit]
+
+
+def search_snomed(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Search SNOMED CT data by code or description"""
+    query_lower = query.lower().strip()
+    snomed_data = load_snomed_data()
+    results = []
+    
+    # Extract SNOMED code from query (e.g., "717896003 snomed" or just "717896003")
+    snomed_match = re.search(r'\b(\d{6,18})\b', query)
+    search_code = snomed_match.group(1) if snomed_match else None
+    
+    for record in snomed_data:
+        code = str(record.get('code', ''))
+        description = record.get('description', '').lower()
+        value_set = record.get('value set name', '')
+        
+        # Match by code or description
+        match = False
+        relevance = 0.0
+        
+        if search_code and code == search_code:
+            match = True
+            relevance = 100.0  # Exact code match
+        elif query_lower in description:
+            match = True
+            relevance = 95.0 if description == query_lower else 85.0
+        elif query_lower in code.lower():
+            match = True
+            relevance = 80.0
+        
+        if match:
+            results.append({
+                'code': code,
+                'term': record.get('description', ''),
+                'description': f"SNOMED CT ({value_set}): {record.get('description', '')}",
+                'system': 'SNOMED CT',
+                'relevance': relevance
+            })
+    
+    # Sort by relevance and limit
+    results.sort(key=lambda x: x['relevance'], reverse=True)
+    return results[:limit]
+
+
+def search_medical_codes(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Search all medical code databases (ICD-10, RxNorm, SNOMED CT, etc.)
+    Returns ROUTE_TO_LOCAL_DATABASE signal if database unavailable
+    """
+    global _database_available
+    
+    # Check database availability first
+    if not check_database_available():
+        return [{"error": DATABASE_UNAVAILABLE_MSG, "route_signal": "ROUTE_TO_LOCAL_DATABASE"}]
+    
+    all_results = []
+    query_lower = query.lower()
+    
+    # Search ICD-10 data (record.json)
+    icd_results = search(query, limit=limit)
+    all_results.extend(icd_results)
+    
+    # Search RxNorm data for RxNorm/RXCUI queries or medication-related queries
+    if any(kw in query_lower for kw in ['rxnorm', 'rxcui', 'medication', 'drug', 'prescription']):
+        rxnorm_results = search_rxnorm(query, limit=limit)
+        all_results.extend(rxnorm_results)
+    
+    # Search SNOMED CT data for SNOMED queries or numeric codes
+    if any(kw in query_lower for kw in ['snomed', 'sct']) or re.search(r'\b\d{6,18}\b', query):
+        snomed_results = search_snomed(query, limit=limit)
+        all_results.extend(snomed_results)
+    
+    # Sort combined results by relevance
+    all_results.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+    
+    return all_results[:limit]
+
+def similarity_score(text1: str, text2: str) -> float:
+    """Calculate similarity score between two texts"""
+    text1_lower = text1.lower().strip()
+    text2_lower = text2.lower().strip()
+    
+    # Exact match gets highest score
+    if text1_lower == text2_lower:
+        return 1.0
+    
+    # Word matching for quick scoring
+    words1 = set(text1_lower.split())
+    words2 = set(text2_lower.split())
+    
+    if not words1 or not words2:
+        return 0.0
+    
+    # Jaccard similarity (faster than SequenceMatcher for quick approximate matching)
+    intersection = len(words1 & words2)
+    union = len(words1 | words2)
+    return intersection / union if union > 0 else 0.0
+
+def preprocess_query(query: str) -> str:
+    """Preprocess and clean the search query"""
+    # Remove extra whitespace and convert to lowercase
+    query = ' '.join(query.split()).lower()
+    return query
+
+def search(query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Search medical records based on query
+    
+    Args:
+        query (str): Search query
+        limit (int): Maximum number of results to return
+        
+    Returns:
+        List[Dict]: List of matching medical records
+    """
+    if not query or not query.strip():
+        return []
+    
+    # Load medical data
+    medical_data = load_medical_data()
+    if not medical_data:
+        return []
+    
+    # Preprocess query - get individual words
+    query_lower = query.lower().strip()
+    query_words = set(query_lower.split())
+    
+    results = []
+    
+    for record in medical_data:
+        # Combine searchable fields
+        term = record.get('term', '').lower()
+        description = record.get('description', '').lower()
+        text = record.get('text', '').lower()
+        
+        searchable_text = f"{term} {description} {text}"
+        searchable_words = searchable_text.split()
+        
+        # Count how many query words appear in the record
+        matching_words = sum(1 for word in query_words if word in searchable_words)
+        
+        # Also check if query appears as substring
+        query_in_text = query_lower in searchable_text
+        
+        # Include record if there are any matches
+        if matching_words > 0 or query_in_text:
+            # Calculate relevance score
+            if query_in_text:
+                relevance = 95.0  # Substring match gets highest score
+            else:
+                # Score based on percentage of query words found
+                relevance = (matching_words / len(query_words)) * 100 if query_words else 0
+            
+            # Only include results with 75% or higher relevance
+            if relevance >= 75.0:
+                result = {
+                    'code': record.get('code', ''),
+                    'term': record.get('term', ''),
+                    'description': record.get('description', ''),
+                    'text': record.get('text', ''),
+                    'system': record.get('system', ''),
+                    'relevance': round(relevance, 2)
+                }
+                results.append(result)
+    
+    # Sort by relevance score (descending)
+    results.sort(key=lambda x: x['relevance'], reverse=True)
+    
+    # Limit results
+    return results[:limit]
+
+def get_medical_advice(query: str) -> str:
+    """
+    Generate medical advice based on search results
+    
+    Args:
+        query (str): User's medical question
+        
+    Returns:
+        str: Formatted medical advice response
+    """
+    results = search(query, limit=5)
+    
+    if not results:
+        return ""  # Return empty string if no results found
+    
+    response = "Based on our medical database, here's what I found:\n\n"
+    
+    for i, result in enumerate(results, 1):
+        response += f"{i}. **{result['term']}** ({result['code']})\n"
+        response += f"   System: {result['system']}\n"
+        response += f"   Description: {result['description']}\n"
+        response += f"   Relevance: {result['relevance']}%\n\n"
+    
+    response += ("⚠️ **Important Disclaimer**: This information is for educational purposes only "
+                 "and should not replace professional medical advice, diagnosis, or treatment. "
+                 "Always consult with qualified healthcare providers for medical concerns.")
+    
+    return response
+
+
+def hybrid_medical_search(query: str) -> Dict[str, Any]:
+    """
+    Hybrid medical search that routes queries to either local database or LLM API
+    based on query intent classification.
+    
+    Routing Logic:
+    - Medical codes/terminology lookup → Local database (ICD-10, RxNorm, etc.)
+    - Medical understanding/explanation → LLM API (Arcee AI via OpenRouter)
+    
+    When database is unavailable, returns ROUTE_TO_LOCAL_DATABASE signal.
+    
+    Args:
+        query (str): User's medical query
+        
+    Returns:
+        Dict with keys:
+            - 'source': 'local', 'llm', or 'none'
+            - 'data': search results, LLM response, or ROUTE_TO_LOCAL_DATABASE signal
+            - 'route': classification result ('llm' or 'local')
+            - 'confidence': classification confidence score
+    """
+    if not query or not query.strip():
+        return {'source': 'none', 'data': [], 'route': 'none', 'confidence': 0.0}
+    
+    # Classify the query
+    route_type, confidence = classify_query(query)
+    
+    if route_type == 'local':
+        # Route to local database for code/terminology lookups
+        # This searches ICD-10, RxNorm, and other medical code databases
+        results = search_medical_codes(query, limit=10)
+        
+        # Check if database returned unavailable signal
+        if results and len(results) == 1 and results[0].get('route_signal') == 'ROUTE_TO_LOCAL_DATABASE':
+            return {
+                'source': 'none',
+                'data': DATABASE_UNAVAILABLE_MSG,
+                'route': route_type,
+                'confidence': confidence,
+                'signal': 'ROUTE_TO_LOCAL_DATABASE'
+            }
+        
+        if results:
+            return {
+                'source': 'local',
+                'data': results,
+                'route': route_type,
+                'confidence': confidence
+            }
+        else:
+            # No local results found - fall back to LLM for explanation
+            llm_response = call_grok_api(query)
+            return {
+                'source': 'llm' if llm_response else 'none',
+                'data': llm_response if llm_response else "No matching medical codes found in the database.",
+                'route': f"{route_type}->llm",
+                'confidence': confidence
+            }
+    
+    else:  # route_type == 'llm'
+        # Route to LLM for medical understanding (symptoms, treatments, etc.)
+        llm_response = call_grok_api(query)
+        if llm_response:
+            return {
+                'source': 'llm',
+                'data': llm_response,
+                'route': route_type,
+                'confidence': confidence
+            }
+        else:
+            # LLM failed - try local database as fallback
+            results = search_medical_codes(query, limit=10)
+            
+            # Check if database returned unavailable signal
+            if results and len(results) == 1 and results[0].get('route_signal') == 'ROUTE_TO_LOCAL_DATABASE':
+                return {
+                    'source': 'none',
+                    'data': DATABASE_UNAVAILABLE_MSG,
+                    'route': f"{route_type}->local",
+                    'confidence': confidence,
+                    'signal': 'ROUTE_TO_LOCAL_DATABASE'
+                }
+            
+            return {
+                'source': 'local' if results else 'none',
+                'data': results if results else DATABASE_UNAVAILABLE_MSG,
+                'route': f"{route_type}->local",
+                'confidence': confidence
+            }
+
+
+def call_grok_api(query: str) -> str:
+    """
+    Query the Arcee AI API for medical information when the local database
+    doesn't contain an answer.
+
+    The API key should be set via the `ARCEE_API_KEY` environment variable.
+    The prompt strictly constrains responses to medical domain knowledge only.
+    Uses OpenRouter to access the Arcee AI trinity-mini:free model.
+    """
+    api_key = os.getenv("ARCEE_API_KEY")
+    if not api_key:
+        # No key available; nothing to do
+        return ""
+
+    # Medical-focused prompt that strictly constrains to medical domain
+    prompt = (
+        "You are a medical assistant. ONLY provide information related to medical, "
+        "health, or healthcare topics. If the question is not medical in nature, "
+        "respond ONLY with: 'I can only answer medical-related questions. "
+        "Please ask a healthcare or medical question.'\n\n"
+        "For medical questions, provide accurate, helpful information while "
+        "including the standard medical disclaimer.\n\n"
+        f"Question: {query}"
+    )
+
+    # OpenRouter requires additional headers for identification
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://medical-chatbot.local",
+        "X-Title": "Medical ChatBot",
+    }
+
+    endpoint = os.getenv("ARCEE_API_URL", "https://openrouter.ai/api/v1/chat/completions")
+
+    try:
+        # Debug: Print request details
+        print(f"Calling Arcee AI API via OpenRouter with endpoint: {endpoint}")
+        print(f"API Key present: {bool(api_key)}")
+        
+        # Updated for chat completion format with OpenRouter model path
+        payload = {
+            "model": "arcee-ai/trinity-mini:free",
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 2000,
+            "temperature": 0.7,
+        }
+        
+        print(f"Request payload: {payload}")
+        
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json=payload,
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Check for API errors
+        if "error" in data:
+            print(f"API returned error: {data['error']}")
+            return ""
+        
+        # Extract response from chat completion format
+        if "choices" in data and len(data["choices"]) > 0:
+            message = data["choices"][0].get("message", {})
+            message_content = message.get("content", "")
+            
+            # Some models return empty content with reasoning - handle this
+            if not message_content or message_content.strip() == "":
+                # Try to get reasoning if available
+                reasoning = message.get("reasoning", "")
+                if reasoning:
+                    message_content = reasoning
+                else:
+                    print("API returned empty content")
+                    return ""
+            
+            if message_content:
+                # Always add medical disclaimer for medical responses
+                disclaimer = ("\n\n⚠️ **Important Disclaimer**: This information is for educational purposes only "
+                            "and should not replace professional medical advice, diagnosis, or treatment. "
+                            "Always consult with qualified healthcare providers for medical concerns.")
+                return message_content + disclaimer
+        return ""
+    except Exception as err:
+        print(f"Arcee AI API error: {err}")
+        return ""
+
+# Test function
+if __name__ == "__main__":
+    # Test the search functionality
+    test_query = "cholera symptoms"
+    results = search(test_query)
+    print(f"Search results for '{test_query}':")
+    for result in results:
+        print(f"- {result['term']} ({result['code']}): {result['relevance']}%")

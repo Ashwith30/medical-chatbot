@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- Premium Meta Essentials -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Premium Medical Q&A Assistant – Ask health-related questions for informational purposes with Apple-inspired design." />
+  <meta name="theme-color" content="#ff2d55" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Medical Assistant" />
+
+  <title>Premium Medical Q&A Assistant</title>
+
+  <!-- Google Font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles-light.css') }}" />
+</head>
+
+<body>
+  <div class="container" role="application">
+
+    <!-- Premium Header -->
+    <header class="header" role="banner">
+      <div class="header-content">
+        <h1>Medical Q&A Assistant</h1>
+        <p class="subtitle">
+          Ask your health-related questions
+        </p>
+        <p class="disclaimer-text">
+          (Disclaimer: For informational purposes only)
+        </p>
+      </div>
+    </header>
+
+    <!-- Main Chat Section -->
+    <main class="chat-container" aria-live="polite">
+
+      <!-- Chat History -->
+      <section 
+        class="chat-history" 
+        id="chatHistory"
+        aria-label="Chat Messages"
+      >
+        <article class="message bot-message">
+          <div class="message-content">
+            <p>
+Hello! I'm your medical Q&A assistant. 
+Please ask any health-related questions you have. 
+Remember, this is for informational purposes only and not a substitute for professional medical advice.
+            </p>
+          </div>
+        </article>
+      </section>
+
+      <!-- Input Form -->
+      <form 
+        class="input-area" 
+        id="chatForm"
+        autocomplete="off"
+      >
+        <label for="userInput" class="input-label">
+          Enter your medical question
+        </label>
+
+        <div class="input-group">
+
+          <input
+            type="text"
+            id="userInput"
+            name="userInput"
+            placeholder="Type your medical question here..."
+            aria-required="true"
+            required
+            autocomplete="on"
+            spellcheck="true"
+          />
+
+          <button 
+            type="submit"
+            class="send-btn"
+            aria-label="Send message"
+          >
+            >
+          </button>
+
+        </div>
+
+        <small class="input-hint">
+          By using this service, you acknowledge that responses are for informational purposes only 
+          and not a substitute for professional medical advice.
+        </small>
+      </form>
+
+    </main>
+
+  </div>
+
+  <!-- Scripts -->
+  <script src="{{ url_for('static', filename='medical-lookup.js') }}"></script>
+  <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+</body>
+</html>
