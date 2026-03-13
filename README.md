@@ -1,3 +1,4 @@
+
 # Medical ChatBot Application
 
 A Flask-based medical chatbot that provides medical information search functionality using ICD-10 medical data.
@@ -144,3 +145,6 @@ Enable detailed logging by setting `FLASK_DEBUG=True` in `.env`
 ## License
 
 This is a demonstration application. Use responsibly and ensure compliance with medical data regulations in your jurisdiction.
+
+# medical-chatbot
+
